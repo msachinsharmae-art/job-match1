@@ -17,6 +17,29 @@ import { Briefcase, ExternalLink, FileText, RefreshCw, LogOut, Sparkles, MapPin,
 
 export const Route = createFileRoute("/")({ component: Home });
 
+function parsePostedHours(posted: string | null, createdAt: string): number | null {
+  if (posted) {
+    const s = posted.toLowerCase().trim();
+    if (s.includes("just") || s.includes("moment")) return 0;
+    const m = s.match(/(\d+)\s*(minute|min|hour|hr|day|week|month|year)/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      const unit = m[2];
+      if (unit.startsWith("min")) return n / 60;
+      if (unit.startsWith("hour") || unit.startsWith("hr")) return n;
+      if (unit.startsWith("day")) return n * 24;
+      if (unit.startsWith("week")) return n * 24 * 7;
+      if (unit.startsWith("month")) return n * 24 * 30;
+      if (unit.startsWith("year")) return n * 24 * 365;
+    }
+  }
+  // Fallback: use created_at
+  if (createdAt) {
+    return (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60);
+  }
+  return null;
+}
+
 function Home() {
   const navigate = useNavigate();
   const [session, setSession] = useState<any>(null);
