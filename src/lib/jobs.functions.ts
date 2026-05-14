@@ -118,13 +118,25 @@ export const scanJobs = createServerFn({ method: "POST" })
       const role = allRoles[idx % Math.max(allRoles.length, 1)] ?? "Product Manager";
       const loc = allLocs[Math.floor(idx / Math.max(allRoles.length, 1)) % Math.max(allLocs.length, 1)] ?? "Gurgaon";
 
-      let jobs: any[] = [];
-      try {
-        jobs = await fetchSerpJobs(role, `${loc}, India`);
-      } catch (e: any) {
-        errors.push(`${role}@${loc}: ${e.message}`);
-        jobs = [];
-      }
+      // Pull from multiple sources in parallel. Google Jobs aggregates many
+      // boards; we add source-biased queries to surface LinkedIn + Naukri +
+      // Indeed listings that might otherwise rank lower in the generic feed.
+      const sourceQueries = [
+        { tag: "Google Jobs", q: role },
+        { tag: "LinkedIn", q: `${role} site:linkedin.com/jobs` },
+        { tag: "Naukri", q: `${role} site:naukri.com` },
+        { tag: "Indeed", q: `${role} site:indeed.com` },
+      ];
+      const results = await Promise.all(sourceQueries.map(async (s) => {
+        try {
+          const r = await fetchSerpJobs(s.q, `${loc}, India`);
+          return r.map((j: any) => ({ ...j, _sourceTag: s.tag }));
+        } catch (e: any) {
+          errors.push(`${s.tag} ${role}@${loc}: ${e.message}`);
+          return [];
+        }
+      }));
+      const jobs: any[] = results.flat();
 
       // Dedupe within batch + against DB, then cap to 8 to keep AI scoring fast.
       const seen = new Set<string>();
