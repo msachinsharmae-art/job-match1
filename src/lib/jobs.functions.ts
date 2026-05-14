@@ -172,7 +172,7 @@ export const scanJobs = createServerFn({ method: "POST" })
           company: j.company_name,
           location: j.location,
           posted_at: j.detected_extensions?.posted_at ?? null,
-          source: j.via ?? "Google Jobs",
+          source: j.via ?? j._sourceTag ?? "Google Jobs",
           source_url: sourceUrl,
           description: (j.description ?? "").slice(0, 5000),
           match_score: score,
