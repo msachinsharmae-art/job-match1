@@ -142,21 +142,31 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
 
         <Tabs defaultValue="jobs">
           <TabsList>
-            <TabsTrigger value="jobs">Jobs ({jobs.length})</TabsTrigger>
+            <TabsTrigger value="jobs">Jobs ({filteredJobs.length})</TabsTrigger>
             <TabsTrigger value="profile">CV & Settings</TabsTrigger>
           </TabsList>
 
           <TabsContent value="jobs" className="space-y-4 mt-4">
             <div className="flex items-center gap-3 flex-wrap">
-              <Label className="text-sm">Filter:</Label>
+              <Label className="text-sm">Status:</Label>
               <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All</SelectItem>
                   <SelectItem value="new">New</SelectItem>
                   <SelectItem value="saved">Saved</SelectItem>
                   <SelectItem value="applied">Applied</SelectItem>
                   <SelectItem value="rejected">Rejected</SelectItem>
+                </SelectContent>
+              </Select>
+              <Label className="text-sm">Posted:</Label>
+              <Select value={filterDate} onValueChange={setFilterDate}>
+                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Any time</SelectItem>
+                  <SelectItem value="24h">Last 24 hours</SelectItem>
+                  <SelectItem value="7d">Last 7 days</SelectItem>
+                  <SelectItem value="30d">Last 30 days</SelectItem>
                 </SelectContent>
               </Select>
               {lastRun && (
@@ -167,12 +177,14 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
             </div>
 
             {jLoading ? <p className="text-muted-foreground">Loading…</p> :
-              jobs.length === 0 ? (
+              filteredJobs.length === 0 ? (
                 <Card><CardContent className="py-12 text-center text-muted-foreground">
                   <Briefcase className="mx-auto mb-3 h-10 w-10 opacity-50" />
-                  No jobs yet. Click <strong>Scan now</strong> to fetch the latest PM/BA roles.
+                  {jobs.length === 0
+                    ? <>No jobs yet. Click <strong>Scan now</strong> to fetch the latest PM/BA roles.</>
+                    : <>No jobs match the selected filters.</>}
                 </CardContent></Card>
-              ) : jobs.map(j => <JobCard key={j.id} job={j} />)}
+              ) : filteredJobs.map(j => <JobCard key={j.id} job={j} />)}
           </TabsContent>
 
           <TabsContent value="profile" className="mt-4">
