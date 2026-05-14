@@ -107,55 +107,68 @@ export const scanJobs = createServerFn({ method: "POST" })
     const errors: string[] = [];
 
     try {
-      const roles = (profile.target_roles ?? []).slice(0, 3);
-      const locations = (profile.target_locations ?? []).slice(0, 2);
-      const seen = new Set<string>();
+      // Keep the per-scan work small enough to finish under the worker's
+      // ~30s request budget. We rotate the role/location pair each run by
+      // using the scan_runs count, so over a few scans every combo is hit.
+      const allRoles = (profile.target_roles ?? []).slice(0, 4);
+      const allLocs = (profile.target_locations ?? []).slice(0, 3);
+      const { count: prevRuns } = await supabase
+        .from("scan_runs").select("id", { count: "exact", head: true }).eq("user_id", userId);
+      const idx = prevRuns ?? 0;
+      const role = allRoles[idx % Math.max(allRoles.length, 1)] ?? "Product Manager";
+      const loc = allLocs[Math.floor(idx / Math.max(allRoles.length, 1)) % Math.max(allLocs.length, 1)] ?? "Gurgaon";
 
-      for (const role of roles) {
-        for (const loc of locations) {
-          let jobs: any[] = [];
-          try {
-            jobs = await fetchSerpJobs(role, `${loc}, India`);
-          } catch (e: any) {
-            errors.push(`${role}@${loc}: ${e.message}`);
-            continue;
-          }
-          for (const j of jobs) {
-            const externalId = j.job_id || `${j.title}-${j.company_name}-${j.location}`.replace(/\s+/g, "-").toLowerCase();
-            if (seen.has(externalId)) continue;
-            seen.add(externalId);
-            totalFound++;
-
-            const { data: existing } = await supabase
-              .from("jobs").select("id").eq("user_id", userId).eq("external_id", externalId).maybeSingle();
-            if (existing) continue;
-
-            const description: string = j.description ?? "";
-            const sourceUrl = j.apply_options?.[0]?.link || j.share_link || j.related_links?.[0]?.link || "";
-
-            const { score, reasons } = await scoreJobWithAI(profile as Profile, {
-              title: j.title, company: j.company_name, location: j.location, description,
-            });
-
-            if (score >= (profile.min_match_score ?? 70)) totalMatched++;
-
-            await supabase.from("jobs").insert({
-              user_id: userId,
-              external_id: externalId,
-              title: j.title,
-              company: j.company_name,
-              location: j.location,
-              posted_at: j.detected_extensions?.posted_at ?? null,
-              source: j.via ?? "Google Jobs",
-              source_url: sourceUrl,
-              description: description.slice(0, 5000),
-              match_score: score,
-              match_reasons: reasons,
-              status: "new",
-            });
-          }
-        }
+      let jobs: any[] = [];
+      try {
+        jobs = await fetchSerpJobs(role, `${loc}, India`);
+      } catch (e: any) {
+        errors.push(`${role}@${loc}: ${e.message}`);
+        jobs = [];
       }
+
+      // Dedupe within batch + against DB, then cap to 8 to keep AI scoring fast.
+      const seen = new Set<string>();
+      const candidates: any[] = [];
+      for (const j of jobs) {
+        const externalId = j.job_id || `${j.title}-${j.company_name}-${j.location}`.replace(/\s+/g, "-").toLowerCase();
+        if (seen.has(externalId)) continue;
+        seen.add(externalId);
+        const { data: existing } = await supabase
+          .from("jobs").select("id").eq("user_id", userId).eq("external_id", externalId).maybeSingle();
+        if (existing) continue;
+        candidates.push({ ...j, _externalId: externalId });
+        if (candidates.length >= 8) break;
+      }
+      totalFound = candidates.length;
+
+      // Score in parallel (Lovable AI handles concurrency fine).
+      const scored = await Promise.all(candidates.map((j) =>
+        scoreJobWithAI(profile as Profile, {
+          title: j.title, company: j.company_name, location: j.location, description: j.description ?? "",
+        }).then((s) => ({ j, ...s }))
+      ));
+
+      // Insert all rows.
+      const minScore = profile.min_match_score ?? 70;
+      const rows = scored.map(({ j, score, reasons }) => {
+        if (score >= minScore) totalMatched++;
+        const sourceUrl = j.apply_options?.[0]?.link || j.share_link || j.related_links?.[0]?.link || "";
+        return {
+          user_id: userId,
+          external_id: j._externalId,
+          title: j.title,
+          company: j.company_name,
+          location: j.location,
+          posted_at: j.detected_extensions?.posted_at ?? null,
+          source: j.via ?? "Google Jobs",
+          source_url: sourceUrl,
+          description: (j.description ?? "").slice(0, 5000),
+          match_score: score,
+          match_reasons: reasons,
+          status: "new",
+        };
+      });
+      if (rows.length) await supabase.from("jobs").insert(rows);
 
       if (run) {
         await supabase.from("scan_runs")
