@@ -96,11 +96,18 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const filteredJobs = jobs.filter(j => {
+    if (filterDate === "all") return true;
+    const maxHours = filterDate === "24h" ? 24 : filterDate === "7d" ? 24 * 7 : 24 * 30;
+    const hours = parsePostedHours(j.posted_at, j.created_at);
+    return hours !== null && hours <= maxHours;
+  });
+
   const stats = {
-    total: jobs.length,
-    matches: jobs.filter(j => (j.match_score ?? 0) >= (profile?.min_match_score ?? 70)).length,
-    applied: jobs.filter(j => j.status === "applied").length,
-    avg: jobs.length ? Math.round(jobs.reduce((a, j) => a + (j.match_score ?? 0), 0) / jobs.length) : 0,
+    total: filteredJobs.length,
+    matches: filteredJobs.filter(j => (j.match_score ?? 0) >= (profile?.min_match_score ?? 70)).length,
+    applied: filteredJobs.filter(j => j.status === "applied").length,
+    avg: filteredJobs.length ? Math.round(filteredJobs.reduce((a, j) => a + (j.match_score ?? 0), 0) / filteredJobs.length) : 0,
   };
 
   return (
