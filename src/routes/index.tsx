@@ -136,7 +136,7 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
   const filteredJobs = jobs.filter(j => {
     if (filterDate === "all") return true;
     const maxHours = filterDate === "24h" ? 24 : filterDate === "7d" ? 24 * 7 : 24 * 30;
-    const hours = parsePostedHours(j.posted_at, j.created_at);
+    const hours = parsePostedHours(j.posted_at);
     return hours !== null && hours <= maxHours;
   });
 
