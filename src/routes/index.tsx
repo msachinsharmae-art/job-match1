@@ -17,6 +17,29 @@ import { Briefcase, ExternalLink, FileText, RefreshCw, LogOut, Sparkles, MapPin,
 
 export const Route = createFileRoute("/")({ component: Home });
 
+function parsePostedHours(posted: string | null, createdAt: string): number | null {
+  if (posted) {
+    const s = posted.toLowerCase().trim();
+    if (s.includes("just") || s.includes("moment")) return 0;
+    const m = s.match(/(\d+)\s*(minute|min|hour|hr|day|week|month|year)/);
+    if (m) {
+      const n = parseInt(m[1], 10);
+      const unit = m[2];
+      if (unit.startsWith("min")) return n / 60;
+      if (unit.startsWith("hour") || unit.startsWith("hr")) return n;
+      if (unit.startsWith("day")) return n * 24;
+      if (unit.startsWith("week")) return n * 24 * 7;
+      if (unit.startsWith("month")) return n * 24 * 30;
+      if (unit.startsWith("year")) return n * 24 * 365;
+    }
+  }
+  // Fallback: use created_at
+  if (createdAt) {
+    return (Date.now() - new Date(createdAt).getTime()) / (1000 * 60 * 60);
+  }
+  return null;
+}
+
 function Home() {
   const navigate = useNavigate();
   const [session, setSession] = useState<any>(null);
@@ -55,6 +78,7 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
   const qc = useQueryClient();
   const scanFn = useServerFn(scanJobs);
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterDate, setFilterDate] = useState<string>("all");
 
   const { data: profile, isLoading: pLoading } = useQuery({
     queryKey: ["profile", userId],
@@ -95,11 +119,18 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const filteredJobs = jobs.filter(j => {
+    if (filterDate === "all") return true;
+    const maxHours = filterDate === "24h" ? 24 : filterDate === "7d" ? 24 * 7 : 24 * 30;
+    const hours = parsePostedHours(j.posted_at, j.created_at);
+    return hours !== null && hours <= maxHours;
+  });
+
   const stats = {
-    total: jobs.length,
-    matches: jobs.filter(j => (j.match_score ?? 0) >= (profile?.min_match_score ?? 70)).length,
-    applied: jobs.filter(j => j.status === "applied").length,
-    avg: jobs.length ? Math.round(jobs.reduce((a, j) => a + (j.match_score ?? 0), 0) / jobs.length) : 0,
+    total: filteredJobs.length,
+    matches: filteredJobs.filter(j => (j.match_score ?? 0) >= (profile?.min_match_score ?? 70)).length,
+    applied: filteredJobs.filter(j => j.status === "applied").length,
+    avg: filteredJobs.length ? Math.round(filteredJobs.reduce((a, j) => a + (j.match_score ?? 0), 0) / filteredJobs.length) : 0,
   };
 
   return (
@@ -134,21 +165,31 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
 
         <Tabs defaultValue="jobs">
           <TabsList>
-            <TabsTrigger value="jobs">Jobs ({jobs.length})</TabsTrigger>
+            <TabsTrigger value="jobs">Jobs ({filteredJobs.length})</TabsTrigger>
             <TabsTrigger value="profile">CV & Settings</TabsTrigger>
           </TabsList>
 
           <TabsContent value="jobs" className="space-y-4 mt-4">
             <div className="flex items-center gap-3 flex-wrap">
-              <Label className="text-sm">Filter:</Label>
+              <Label className="text-sm">Status:</Label>
               <Select value={filterStatus} onValueChange={setFilterStatus}>
-                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                <SelectTrigger className="w-36"><SelectValue /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All</SelectItem>
                   <SelectItem value="new">New</SelectItem>
                   <SelectItem value="saved">Saved</SelectItem>
                   <SelectItem value="applied">Applied</SelectItem>
                   <SelectItem value="rejected">Rejected</SelectItem>
+                </SelectContent>
+              </Select>
+              <Label className="text-sm">Posted:</Label>
+              <Select value={filterDate} onValueChange={setFilterDate}>
+                <SelectTrigger className="w-40"><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">Any time</SelectItem>
+                  <SelectItem value="24h">Last 24 hours</SelectItem>
+                  <SelectItem value="7d">Last 7 days</SelectItem>
+                  <SelectItem value="30d">Last 30 days</SelectItem>
                 </SelectContent>
               </Select>
               {lastRun && (
@@ -159,12 +200,14 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
             </div>
 
             {jLoading ? <p className="text-muted-foreground">Loading…</p> :
-              jobs.length === 0 ? (
+              filteredJobs.length === 0 ? (
                 <Card><CardContent className="py-12 text-center text-muted-foreground">
                   <Briefcase className="mx-auto mb-3 h-10 w-10 opacity-50" />
-                  No jobs yet. Click <strong>Scan now</strong> to fetch the latest PM/BA roles.
+                  {jobs.length === 0
+                    ? <>No jobs yet. Click <strong>Scan now</strong> to fetch the latest PM/BA roles.</>
+                    : <>No jobs match the selected filters.</>}
                 </CardContent></Card>
-              ) : jobs.map(j => <JobCard key={j.id} job={j} />)}
+              ) : filteredJobs.map(j => <JobCard key={j.id} job={j} />)}
           </TabsContent>
 
           <TabsContent value="profile" className="mt-4">
