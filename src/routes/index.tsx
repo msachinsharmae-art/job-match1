@@ -55,6 +55,7 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
   const qc = useQueryClient();
   const scanFn = useServerFn(scanJobs);
   const [filterStatus, setFilterStatus] = useState<string>("all");
+  const [filterDate, setFilterDate] = useState<string>("all");
 
   const { data: profile, isLoading: pLoading } = useQuery({
     queryKey: ["profile", userId],
