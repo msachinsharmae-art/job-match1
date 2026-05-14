@@ -14,7 +14,144 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      jobs: {
+        Row: {
+          company: string | null
+          cover_letter: string | null
+          created_at: string
+          description: string | null
+          external_id: string
+          id: string
+          location: string | null
+          match_reasons: string[] | null
+          match_score: number | null
+          posted_at: string | null
+          source: string | null
+          source_url: string | null
+          status: string
+          title: string
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          company?: string | null
+          cover_letter?: string | null
+          created_at?: string
+          description?: string | null
+          external_id: string
+          id?: string
+          location?: string | null
+          match_reasons?: string[] | null
+          match_score?: number | null
+          posted_at?: string | null
+          source?: string | null
+          source_url?: string | null
+          status?: string
+          title: string
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          company?: string | null
+          cover_letter?: string | null
+          created_at?: string
+          description?: string | null
+          external_id?: string
+          id?: string
+          location?: string | null
+          match_reasons?: string[] | null
+          match_score?: number | null
+          posted_at?: string | null
+          source?: string | null
+          source_url?: string | null
+          status?: string
+          title?: string
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      profiles: {
+        Row: {
+          created_at: string
+          cv_summary: string | null
+          email: string | null
+          experience_years: number | null
+          full_name: string | null
+          headline: string | null
+          id: string
+          min_match_score: number | null
+          search_keywords: string[] | null
+          target_locations: string[] | null
+          target_roles: string[] | null
+          updated_at: string
+          user_id: string
+        }
+        Insert: {
+          created_at?: string
+          cv_summary?: string | null
+          email?: string | null
+          experience_years?: number | null
+          full_name?: string | null
+          headline?: string | null
+          id?: string
+          min_match_score?: number | null
+          search_keywords?: string[] | null
+          target_locations?: string[] | null
+          target_roles?: string[] | null
+          updated_at?: string
+          user_id: string
+        }
+        Update: {
+          created_at?: string
+          cv_summary?: string | null
+          email?: string | null
+          experience_years?: number | null
+          full_name?: string | null
+          headline?: string | null
+          id?: string
+          min_match_score?: number | null
+          search_keywords?: string[] | null
+          target_locations?: string[] | null
+          target_roles?: string[] | null
+          updated_at?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
+      scan_runs: {
+        Row: {
+          error: string | null
+          finished_at: string | null
+          id: string
+          jobs_found: number | null
+          jobs_matched: number | null
+          started_at: string
+          status: string
+          user_id: string
+        }
+        Insert: {
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          jobs_found?: number | null
+          jobs_matched?: number | null
+          started_at?: string
+          status?: string
+          user_id: string
+        }
+        Update: {
+          error?: string | null
+          finished_at?: string | null
+          id?: string
+          jobs_found?: number | null
+          jobs_matched?: number | null
+          started_at?: string
+          status?: string
+          user_id?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
