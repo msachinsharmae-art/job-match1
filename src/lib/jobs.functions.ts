@@ -284,9 +284,9 @@ export const updateProfile = createServerFn({ method: "POST" })
   .inputValidator((d) => z.object({
     full_name: z.string().min(1).max(200),
     headline: z.string().min(1).max(300),
-    target_roles: z.array(z.string().min(1).max(100)).min(1).max(10),
-    target_locations: z.array(z.string().min(1).max(100)).min(1).max(10),
-    search_keywords: z.array(z.string().min(1).max(80)).max(30),
+    target_roles: z.array(z.string().min(1).max(100)).min(1).max(50),
+    target_locations: z.array(z.string().min(1).max(100)).min(1).max(20),
+    search_keywords: z.array(z.string().min(1).max(80)).max(100),
     experience_years: z.number().min(0).max(60),
     min_match_score: z.number().int().min(0).max(100),
     cv_summary: z.string().min(10).max(4000),
