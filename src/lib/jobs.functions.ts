@@ -22,13 +22,14 @@ async function scoreJobWithAI(profile: Profile, job: {
   const apiKey = process.env.LOVABLE_API_KEY;
   if (!apiKey) return { score: 0, reasons: ["LOVABLE_API_KEY missing"] };
 
-  const sys = `You are an expert recruiter. Score how well a job posting matches a candidate from 0-100. Return strict JSON: {"score": number, "reasons": [string, string, string]}.
-Scoring:
+  const sys = `You are an expert recruiter scoring how well a job matches a candidate from 0-100. Return ONLY valid JSON: {"score": number, "reasons": [string, string, string]}.
+Scoring guide:
 - 90-100: perfect role + location + skills
 - 75-89: strong match, minor gaps
-- 60-74: relevant but missing some core requirements
-- below 60: weak match
-Reasons should each be ≤12 words, citing specific overlap or gaps.`;
+- 60-74: relevant role, some skill gaps
+- 40-59: adjacent role, transferable skills
+- below 40: weak match
+Reasons: each ≤14 words, cite specific overlap or gaps. Be generous when role family matches (PM/BA/PO/Product Analyst all overlap).`;
 
   const user = `CANDIDATE:
 Name: ${profile.full_name}
@@ -43,36 +44,54 @@ JOB:
 Title: ${job.title}
 Company: ${job.company ?? "?"}
 Location: ${job.location ?? "?"}
-Description: ${(job.description ?? "").slice(0, 2500)}
+Description: ${(job.description ?? "").slice(0, 3000)}
 
-Return ONLY valid JSON, no markdown.`;
+Return ONLY JSON, no markdown, no commentary.`;
 
-  try {
-    const res = await fetch(LOVABLE_AI, {
-      method: "POST",
-      headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: "google/gemini-2.5-flash",
-        messages: [{ role: "system", content: sys }, { role: "user", content: user }],
-      }),
-    });
-    if (!res.ok) {
-      const t = await res.text();
-      console.error("AI score failed:", res.status, t);
-      return { score: 0, reasons: [`AI error ${res.status}`] };
+  // Try up to 2 times, with response_format hint for stricter JSON.
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const res = await fetch(LOVABLE_AI, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: "google/gemini-2.5-flash",
+          messages: [{ role: "system", content: sys }, { role: "user", content: user }],
+          response_format: { type: "json_object" },
+        }),
+      });
+      if (!res.ok) {
+        const t = await res.text();
+        console.error(`AI score HTTP ${res.status} (attempt ${attempt + 1}):`, t.slice(0, 200));
+        if (res.status === 429 || res.status >= 500) { await new Promise(r => setTimeout(r, 800)); continue; }
+        return { score: 0, reasons: [`AI error ${res.status}`] };
+      }
+      const data = await res.json();
+      const text: string = data.choices?.[0]?.message?.content ?? "";
+      // Robust JSON extraction: strip fences, find first {...} block.
+      let cleaned = text.replace(/```json|```/g, "").trim();
+      const m = cleaned.match(/\{[\s\S]*\}/);
+      if (m) cleaned = m[0];
+      try {
+        const parsed = JSON.parse(cleaned);
+        const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 0)));
+        const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.slice(0, 4).map(String) : [];
+        return { score, reasons };
+      } catch (pe) {
+        console.error(`AI score JSON parse failed (attempt ${attempt + 1}):`, text.slice(0, 200));
+        // Try a numeric fallback before retrying.
+        const numMatch = text.match(/"?score"?\s*[:=]\s*(\d+)/i);
+        if (numMatch) {
+          return { score: Math.max(0, Math.min(100, parseInt(numMatch[1], 10))), reasons: ["AI returned partial response"] };
+        }
+        if (attempt === 1) return { score: 0, reasons: ["scoring failed - bad JSON"] };
+      }
+    } catch (e: any) {
+      console.error(`AI score exception (attempt ${attempt + 1}):`, e.message);
+      if (attempt === 1) return { score: 0, reasons: [`scoring failed: ${e.message?.slice(0, 60)}`] };
     }
-    const data = await res.json();
-    const text: string = data.choices?.[0]?.message?.content ?? "{}";
-    const cleaned = text.replace(/```json|```/g, "").trim();
-    const parsed = JSON.parse(cleaned);
-    return {
-      score: Math.max(0, Math.min(100, Number(parsed.score) || 0)),
-      reasons: Array.isArray(parsed.reasons) ? parsed.reasons.slice(0, 4).map(String) : [],
-    };
-  } catch (e) {
-    console.error("AI parse error:", e);
-    return { score: 0, reasons: ["scoring failed"] };
   }
+  return { score: 0, reasons: ["scoring failed"] };
 }
 
 async function fetchSerpJobs(query: string, location: string): Promise<any[]> {
@@ -118,14 +137,19 @@ export const scanJobs = createServerFn({ method: "POST" })
       const role = allRoles[idx % Math.max(allRoles.length, 1)] ?? "Product Manager";
       const loc = allLocs[Math.floor(idx / Math.max(allRoles.length, 1)) % Math.max(allLocs.length, 1)] ?? "Gurgaon";
 
-      // Pull from multiple sources in parallel. Google Jobs aggregates many
-      // boards; we add source-biased queries to surface LinkedIn + Naukri +
-      // Indeed listings that might otherwise rank lower in the generic feed.
+      // Pull from many sources in parallel. Google Jobs aggregates many boards;
+      // we add source-biased site: queries to surface LinkedIn, Naukri, Indeed,
+      // Foundit/Monster, Glassdoor, Hirist, Instahyre, Wellfound listings.
       const sourceQueries = [
         { tag: "Google Jobs", q: role },
         { tag: "LinkedIn", q: `${role} site:linkedin.com/jobs` },
         { tag: "Naukri", q: `${role} site:naukri.com` },
         { tag: "Indeed", q: `${role} site:indeed.com` },
+        { tag: "Foundit", q: `${role} site:foundit.in OR site:monsterindia.com` },
+        { tag: "Glassdoor", q: `${role} site:glassdoor.co.in` },
+        { tag: "Hirist", q: `${role} site:hirist.com` },
+        { tag: "Instahyre", q: `${role} site:instahyre.com` },
+        { tag: "Wellfound", q: `${role} site:wellfound.com OR site:angel.co` },
       ];
       const results = await Promise.all(sourceQueries.map(async (s) => {
         try {
@@ -149,7 +173,7 @@ export const scanJobs = createServerFn({ method: "POST" })
           .from("jobs").select("id").eq("user_id", userId).eq("external_id", externalId).maybeSingle();
         if (existing) continue;
         candidates.push({ ...j, _externalId: externalId });
-        if (candidates.length >= 8) break;
+        if (candidates.length >= 20) break;
       }
       totalFound = candidates.length;
 
