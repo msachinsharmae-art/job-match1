@@ -1,0 +1,1 @@
+SELECT cron.unschedule('job-hunter-scan-every-2h');
