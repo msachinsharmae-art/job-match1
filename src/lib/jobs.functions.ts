@@ -219,12 +219,13 @@ export const scanJobs = createServerFn({ method: "POST" })
       const candidates = uniqueJobs.filter((j) => !existingIds.has(j._externalId)).slice(0, 24);
       totalFound = candidates.length;
 
-      // Score in parallel (Lovable AI handles concurrency fine).
-      const scored = await Promise.all(candidates.map((j) =>
-        scoreJobWithAI(profile as Profile, {
+      // Free local heuristic scoring (no API credits).
+      const scored = candidates.map((j) => {
+        const s = scoreJobHeuristic(profile as Profile, {
           title: j.title, company: j.company_name, location: j.location, description: j.description ?? "",
-        }).then((s) => ({ j, ...s }))
-      ));
+        });
+        return { j, ...s };
+      });
 
       // Insert all rows.
       const minScore = profile.min_match_score ?? 70;
