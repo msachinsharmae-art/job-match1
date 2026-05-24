@@ -51,82 +51,69 @@ function parsePostedAgeHours(posted: string | null | undefined): number {
   return Number.isNaN(t) ? Number.POSITIVE_INFINITY : (Date.now() - t) / (1000 * 60 * 60);
 }
 
-async function scoreJobWithAI(profile: Profile, job: {
+// Free, local heuristic scorer (no AI credits required).
+function scoreJobHeuristic(profile: Profile, job: {
   title: string; company: string | null; location: string | null; description: string;
-}): Promise<{ score: number; reasons: string[] }> {
-  const apiKey = process.env.LOVABLE_API_KEY;
-  if (!apiKey) return { score: 0, reasons: ["LOVABLE_API_KEY missing"] };
+}): { score: number; reasons: string[] } {
+  const reasons: string[] = [];
+  const jobText = `${job.title} ${job.description ?? ""}`.toLowerCase();
+  const jobTitle = (job.title || "").toLowerCase();
+  const jobLoc = (job.location || "").toLowerCase();
 
-  const sys = `You are an expert recruiter scoring how well a job matches a candidate from 0-100. Return ONLY valid JSON: {"score": number, "reasons": [string, string, string]}.
-Scoring guide:
-- 90-100: perfect role + location + skills
-- 75-89: strong match, minor gaps
-- 60-74: relevant role, some skill gaps
-- 40-59: adjacent role, transferable skills
-- below 40: weak match
-Reasons: each ≤14 words, cite specific overlap or gaps. Be generous when role family matches (PM/BA/PO/Product Analyst all overlap).`;
-
-  const user = `CANDIDATE:
-Name: ${profile.full_name}
-Headline: ${profile.headline}
-Experience: ${profile.experience_years} years
-Target roles: ${(profile.target_roles ?? []).join(", ")}
-Target locations: ${(profile.target_locations ?? []).join(", ")}
-Key skills/keywords: ${(profile.search_keywords ?? []).join(", ")}
-CV summary: ${profile.cv_summary}
-
-JOB:
-Title: ${job.title}
-Company: ${job.company ?? "?"}
-Location: ${job.location ?? "?"}
-Description: ${(job.description ?? "").slice(0, 3000)}
-
-Return ONLY JSON, no markdown, no commentary.`;
-
-  // Try up to 2 times, with response_format hint for stricter JSON.
-  for (let attempt = 0; attempt < 2; attempt++) {
-    try {
-      const res = await fetch(LOVABLE_AI, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          model: "google/gemini-2.5-flash",
-          messages: [{ role: "system", content: sys }, { role: "user", content: user }],
-          response_format: { type: "json_object" },
-        }),
-      });
-      if (!res.ok) {
-        const t = await res.text();
-        console.error(`AI score HTTP ${res.status} (attempt ${attempt + 1}):`, t.slice(0, 200));
-        if (res.status === 429 || res.status >= 500) { await new Promise(r => setTimeout(r, 800)); continue; }
-        return { score: 0, reasons: [`AI error ${res.status}`] };
-      }
-      const data = await res.json();
-      const text: string = data.choices?.[0]?.message?.content ?? "";
-      // Robust JSON extraction: strip fences, find first {...} block.
-      let cleaned = text.replace(/```json|```/g, "").trim();
-      const m = cleaned.match(/\{[\s\S]*\}/);
-      if (m) cleaned = m[0];
-      try {
-        const parsed = JSON.parse(cleaned);
-        const score = Math.max(0, Math.min(100, Math.round(Number(parsed.score) || 0)));
-        const reasons = Array.isArray(parsed.reasons) ? parsed.reasons.slice(0, 4).map(String) : [];
-        return { score, reasons };
-      } catch (pe) {
-        console.error(`AI score JSON parse failed (attempt ${attempt + 1}):`, text.slice(0, 200));
-        // Try a numeric fallback before retrying.
-        const numMatch = text.match(/"?score"?\s*[:=]\s*(\d+)/i);
-        if (numMatch) {
-          return { score: Math.max(0, Math.min(100, parseInt(numMatch[1], 10))), reasons: ["AI returned partial response"] };
-        }
-        if (attempt === 1) return { score: 0, reasons: ["scoring failed - bad JSON"] };
-      }
-    } catch (e: any) {
-      console.error(`AI score exception (attempt ${attempt + 1}):`, e.message);
-      if (attempt === 1) return { score: 0, reasons: [`scoring failed: ${e.message?.slice(0, 60)}`] };
+  // 1. Role match (max 40 pts)
+  const roles = (profile.target_roles ?? []).map((r) => r.toLowerCase().trim()).filter(Boolean);
+  let roleScore = 0;
+  const matchedRoles: string[] = [];
+  for (const role of roles) {
+    if (jobTitle.includes(role)) { roleScore = Math.max(roleScore, 40); matchedRoles.push(role); }
+    else if (jobText.includes(role)) { roleScore = Math.max(roleScore, 25); matchedRoles.push(role); }
+    else {
+      const roleTokens = role.split(/\s+/).filter((t) => t.length > 2);
+      const hit = roleTokens.filter((t) => jobTitle.includes(t)).length;
+      if (hit > 0) roleScore = Math.max(roleScore, Math.min(20, hit * 10));
     }
   }
-  return { score: 0, reasons: ["scoring failed"] };
+  if (matchedRoles.length) reasons.push(`Role match: ${matchedRoles.slice(0, 2).join(", ")}`);
+  else if (roleScore > 0) reasons.push("Adjacent role family");
+  else reasons.push("Role not in your targets");
+
+  // 2. Location match (max 20 pts)
+  const locs = (profile.target_locations ?? []).map((l) => l.toLowerCase().trim()).filter(Boolean);
+  let locScore = 0;
+  let matchedLoc = "";
+  const remote = /remote|anywhere|work from home|wfh/.test(jobLoc) || /\bremote\b/.test(jobText);
+  for (const loc of locs) {
+    if (loc.includes("remote") && remote) { locScore = 20; matchedLoc = "Remote"; break; }
+    const first = loc.split(",")[0].trim();
+    if (jobLoc.includes(loc) || (first && jobLoc.includes(first))) {
+      locScore = 20; matchedLoc = loc; break;
+    }
+  }
+  if (!locScore && remote && locs.length === 0) { locScore = 15; matchedLoc = "Remote"; }
+  if (matchedLoc) reasons.push(`Location: ${matchedLoc}`);
+  else if (jobLoc) reasons.push(`Location: ${job.location} (outside targets)`);
+
+  // 3. Keyword overlap (max 30 pts)
+  const keywords = (profile.search_keywords ?? []).map((k) => k.toLowerCase().trim()).filter(Boolean);
+  const matchedKw: string[] = [];
+  for (const kw of keywords) {
+    if (kw && jobText.includes(kw)) matchedKw.push(kw);
+  }
+  const kwScore = keywords.length
+    ? Math.min(30, Math.round((matchedKw.length / Math.max(1, keywords.length)) * 30) + (matchedKw.length >= 3 ? 5 : 0))
+    : 0;
+  if (matchedKw.length) reasons.push(`Skills matched: ${matchedKw.slice(0, 4).join(", ")}`);
+
+  // 4. Experience seniority alignment (max 10 pts)
+  const years = profile.experience_years ?? 0;
+  let expScore = 5;
+  if (years >= 8 && /(senior|lead|principal|staff|head of|director)/.test(jobTitle)) expScore = 10;
+  else if (years >= 4 && /(mid|intermediate|\bii\b|\biii\b)/.test(jobTitle)) expScore = 10;
+  else if (years <= 3 && /(junior|entry|graduate|associate|intern)/.test(jobTitle)) expScore = 10;
+  else if (/(senior|lead|principal|staff)/.test(jobTitle) && years < 4) expScore = 0;
+
+  const total = Math.max(0, Math.min(100, roleScore + locScore + kwScore + expScore));
+  return { score: total, reasons: reasons.slice(0, 4) };
 }
 
 async function fetchSerpJobs(query: string, location: string, freshness?: "qdr:d" | "qdr:w"): Promise<any[]> {
