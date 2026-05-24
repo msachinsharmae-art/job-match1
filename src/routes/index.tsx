@@ -176,6 +176,9 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => rescoreMutation.mutate()} disabled={rescoreMutation.isPending}>
+              {rescoreMutation.isPending ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Rescoring…</> : "Rescore all"}
+            </Button>
             <Button onClick={() => scanMutation.mutate()} disabled={scanMutation.isPending}>
               {scanMutation.isPending ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Scanning…</> : <><Sparkles className="mr-2 h-4 w-4" />Scan now</>}
             </Button>
