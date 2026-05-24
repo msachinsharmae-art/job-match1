@@ -106,7 +106,12 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
   const { data: jobs = [], isLoading: jLoading } = useQuery({
     queryKey: ["jobs", userId, filterStatus],
     queryFn: async () => {
-      let q = supabase.from("jobs").select("*").eq("user_id", userId).order("match_score", { ascending: false }).order("created_at", { ascending: false });
+      let q = supabase
+        .from("jobs")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false })
+        .order("match_score", { ascending: false });
       if (filterStatus !== "all") q = q.eq("status", filterStatus);
       const { data, error } = await q.limit(200);
       if (error) throw error;

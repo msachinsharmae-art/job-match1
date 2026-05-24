@@ -16,6 +16,41 @@ type Profile = {
   cv_summary: string | null;
 };
 
+function parsePostedAgeHours(posted: string | null | undefined): number {
+  if (!posted) return Number.POSITIVE_INFINITY;
+
+  const s = posted.toLowerCase().trim();
+  if (!s) return Number.POSITIVE_INFINITY;
+  if (s.includes("just") || s.includes("moment") || s === "today") return 0;
+  if (s === "yesterday") return 24;
+
+  const rel = s.match(/(\d+)\+?\s*(minute|min|hour|hr|day|week|month|year)/);
+  if (rel) {
+    const n = parseInt(rel[1], 10);
+    const unit = rel[2];
+    if (unit.startsWith("min")) return n / 60;
+    if (unit.startsWith("hour") || unit.startsWith("hr")) return n;
+    if (unit.startsWith("day")) return n * 24;
+    if (unit.startsWith("week")) return n * 24 * 7;
+    if (unit.startsWith("month")) return n * 24 * 30;
+    if (unit.startsWith("year")) return n * 24 * 365;
+  }
+
+  const word = s.match(/^(an?|one)\s+(minute|hour|day|week|month|year)/);
+  if (word) {
+    const unit = word[2];
+    if (unit === "minute") return 1 / 60;
+    if (unit === "hour") return 1;
+    if (unit === "day") return 24;
+    if (unit === "week") return 24 * 7;
+    if (unit === "month") return 24 * 30;
+    if (unit === "year") return 24 * 365;
+  }
+
+  const t = Date.parse(posted);
+  return Number.isNaN(t) ? Number.POSITIVE_INFINITY : (Date.now() - t) / (1000 * 60 * 60);
+}
+
 async function scoreJobWithAI(profile: Profile, job: {
   title: string; company: string | null; location: string | null; description: string;
 }): Promise<{ score: number; reasons: string[] }> {
@@ -94,10 +129,20 @@ Return ONLY JSON, no markdown, no commentary.`;
   return { score: 0, reasons: ["scoring failed"] };
 }
 
-async function fetchSerpJobs(query: string, location: string): Promise<any[]> {
+async function fetchSerpJobs(query: string, location: string, freshness?: "qdr:d" | "qdr:w"): Promise<any[]> {
   const key = process.env.SERPAPI_KEY;
   if (!key) throw new Error("SERPAPI_KEY missing");
-  const url = `${SERPAPI}?engine=google_jobs&q=${encodeURIComponent(query)}&location=${encodeURIComponent(location)}&hl=en&api_key=${key}`;
+
+  const params = new URLSearchParams({
+    engine: "google_jobs",
+    q: query,
+    location,
+    hl: "en",
+    api_key: key,
+  });
+  if (freshness) params.set("tbs", freshness);
+
+  const url = `${SERPAPI}?${params.toString()}`;
   const res = await fetch(url);
   if (!res.ok) {
     const t = await res.text();
@@ -135,30 +180,56 @@ export const scanJobs = createServerFn({ method: "POST" })
       const cappedCombos = combos.slice(0, 12);
 
       const results = await Promise.all(cappedCombos.map(async ({ role, loc }) => {
-        try {
-          const r = await fetchSerpJobs(role, `${loc}, India`);
-          return r.map((j: any) => ({ ...j, _sourceTag: "Google Jobs" }));
-        } catch (e: any) {
-          errors.push(`${role}@${loc}: ${e.message}`);
-          return [];
-        }
+        const scans = await Promise.all([
+          fetchSerpJobs(role, `${loc}, India`)
+            .then((r) => r.map((j: any) => ({ ...j, _sourceTag: "Google Jobs" })))
+            .catch((e: any) => {
+              errors.push(`${role}@${loc}: ${e.message}`);
+              return [];
+            }),
+          fetchSerpJobs(role, `${loc}, India`, "qdr:w")
+            .then((r) => r.map((j: any) => ({ ...j, _sourceTag: "Google Jobs" })))
+            .catch((e: any) => {
+              errors.push(`${role}@${loc} [fresh]: ${e.message}`);
+              return [];
+            }),
+        ]);
+
+        return scans.flat();
       }));
-      const jobs: any[] = results.flat();
 
-
-      // Dedupe within batch + against DB, then cap to 8 to keep AI scoring fast.
-      const seen = new Set<string>();
-      const candidates: any[] = [];
-      for (const j of jobs) {
+      const jobs: any[] = results.flat().map((j: any) => {
+        const postedAt = j.detected_extensions?.posted_at ?? j.posted_at ?? null;
         const externalId = j.job_id || `${j.title}-${j.company_name}-${j.location}`.replace(/\s+/g, "-").toLowerCase();
-        if (seen.has(externalId)) continue;
-        seen.add(externalId);
-        const { data: existing } = await supabase
-          .from("jobs").select("id").eq("user_id", userId).eq("external_id", externalId).maybeSingle();
-        if (existing) continue;
-        candidates.push({ ...j, _externalId: externalId });
-        if (candidates.length >= 20) break;
-      }
+
+        return {
+          ...j,
+          _externalId: externalId,
+          _postedAgeHours: parsePostedAgeHours(postedAt),
+        };
+      });
+
+      const seen = new Set<string>();
+      const uniqueJobs = jobs
+        .sort((a, b) => a._postedAgeHours - b._postedAgeHours)
+        .filter((j) => {
+          if (seen.has(j._externalId)) return false;
+          seen.add(j._externalId);
+          return true;
+        });
+
+      const lookupIds = uniqueJobs.slice(0, 160).map((j) => j._externalId);
+      const { data: existingRows, error: existingErr } = lookupIds.length
+        ? await supabase
+            .from("jobs")
+            .select("external_id")
+            .eq("user_id", userId)
+            .in("external_id", lookupIds)
+        : { data: [], error: null };
+      if (existingErr) throw new Error(existingErr.message);
+
+      const existingIds = new Set((existingRows ?? []).map((row) => row.external_id));
+      const candidates = uniqueJobs.filter((j) => !existingIds.has(j._externalId)).slice(0, 24);
       totalFound = candidates.length;
 
       // Score in parallel (Lovable AI handles concurrency fine).
