@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/integrations/supabase/client";
-import { scanJobs, generateCoverLetter, updateJobStatus, updateProfile } from "@/lib/jobs.functions";
+import { scanJobs, generateCoverLetter, updateJobStatus, updateProfile, rescoreAllJobs } from "@/lib/jobs.functions";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -91,6 +91,7 @@ type Profile = {
 function Dashboard({ userId, email }: { userId: string; email?: string }) {
   const qc = useQueryClient();
   const scanFn = useServerFn(scanJobs);
+  const rescoreFn = useServerFn(rescoreAllJobs);
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterDate, setFilterDate] = useState<string>("all");
 
@@ -138,6 +139,15 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const rescoreMutation = useMutation({
+    mutationFn: async () => rescoreFn(),
+    onSuccess: (r) => {
+      toast.success(`Rescored ${r.rescored} jobs`);
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
   const filteredJobs = jobs.filter(j => {
     if (filterDate === "all") return true;
     const maxHours = filterDate === "24h" ? 24 : filterDate === "7d" ? 24 * 7 : 24 * 30;
@@ -166,6 +176,9 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
             </div>
           </div>
           <div className="flex items-center gap-2">
+            <Button variant="outline" onClick={() => rescoreMutation.mutate()} disabled={rescoreMutation.isPending}>
+              {rescoreMutation.isPending ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Rescoring…</> : "Rescore all"}
+            </Button>
             <Button onClick={() => scanMutation.mutate()} disabled={scanMutation.isPending}>
               {scanMutation.isPending ? <><RefreshCw className="mr-2 h-4 w-4 animate-spin" />Scanning…</> : <><Sparkles className="mr-2 h-4 w-4" />Scan now</>}
             </Button>

@@ -308,6 +308,32 @@ ${(job.description ?? "").slice(0, 2000)}`;
     return { coverLetter: letter };
   });
 
+export const rescoreAllJobs = createServerFn({ method: "POST" })
+  .middleware([requireSupabaseAuth])
+  .handler(async ({ context }) => {
+    const { supabase, userId } = context;
+    const { data: profile } = await supabase
+      .from("profiles").select("*").eq("user_id", userId).single();
+    if (!profile) throw new Error("Profile not found");
+
+    const { data: jobs } = await supabase
+      .from("jobs").select("id, title, company, location, description")
+      .eq("user_id", userId);
+    if (!jobs?.length) return { rescored: 0 };
+
+    let count = 0;
+    for (const j of jobs) {
+      const { score, reasons } = scoreJobHeuristic(profile as Profile, {
+        title: j.title, company: j.company, location: j.location, description: j.description ?? "",
+      });
+      await supabase.from("jobs")
+        .update({ match_score: score, match_reasons: reasons })
+        .eq("id", j.id).eq("user_id", userId);
+      count++;
+    }
+    return { rescored: count };
+  });
+
 export const updateJobStatus = createServerFn({ method: "POST" })
   .middleware([requireSupabaseAuth])
   .inputValidator((d) => z.object({
