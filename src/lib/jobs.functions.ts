@@ -126,41 +126,25 @@ export const scanJobs = createServerFn({ method: "POST" })
     const errors: string[] = [];
 
     try {
-      // Keep the per-scan work small enough to finish under the worker's
-      // ~30s request budget. We rotate the role/location pair each run by
-      // using the scan_runs count, so over a few scans every combo is hit.
-      const allRoles = (profile.target_roles ?? []).slice(0, 4);
-      const allLocs = (profile.target_locations ?? []).slice(0, 3);
-      const { count: prevRuns } = await supabase
-        .from("scan_runs").select("id", { count: "exact", head: true }).eq("user_id", userId);
-      const idx = prevRuns ?? 0;
-      const role = allRoles[idx % Math.max(allRoles.length, 1)] ?? "Product Manager";
-      const loc = allLocs[Math.floor(idx / Math.max(allRoles.length, 1)) % Math.max(allLocs.length, 1)] ?? "Gurgaon";
+      // Scan every role × location, one Google Jobs query per combo.
+      // Cap combos to stay within the worker's ~30s budget.
+      const roles = (profile.target_roles ?? ["Product Manager"]).slice(0, 5);
+      const locs = (profile.target_locations ?? ["Gurgaon"]).slice(0, 4);
+      const combos: { role: string; loc: string }[] = [];
+      for (const r of roles) for (const l of locs) combos.push({ role: r, loc: l });
+      const cappedCombos = combos.slice(0, 12);
 
-      // Pull from many sources in parallel. Google Jobs aggregates many boards;
-      // we add source-biased site: queries to surface LinkedIn, Naukri, Indeed,
-      // Foundit/Monster, Glassdoor, Hirist, Instahyre, Wellfound listings.
-      const sourceQueries = [
-        { tag: "Google Jobs", q: role },
-        { tag: "LinkedIn", q: `${role} site:linkedin.com/jobs` },
-        { tag: "Naukri", q: `${role} site:naukri.com` },
-        { tag: "Indeed", q: `${role} site:indeed.com` },
-        { tag: "Foundit", q: `${role} site:foundit.in OR site:monsterindia.com` },
-        { tag: "Glassdoor", q: `${role} site:glassdoor.co.in` },
-        { tag: "Hirist", q: `${role} site:hirist.com` },
-        { tag: "Instahyre", q: `${role} site:instahyre.com` },
-        { tag: "Wellfound", q: `${role} site:wellfound.com OR site:angel.co` },
-      ];
-      const results = await Promise.all(sourceQueries.map(async (s) => {
+      const results = await Promise.all(cappedCombos.map(async ({ role, loc }) => {
         try {
-          const r = await fetchSerpJobs(s.q, `${loc}, India`);
-          return r.map((j: any) => ({ ...j, _sourceTag: s.tag }));
+          const r = await fetchSerpJobs(role, `${loc}, India`);
+          return r.map((j: any) => ({ ...j, _sourceTag: "Google Jobs" }));
         } catch (e: any) {
-          errors.push(`${s.tag} ${role}@${loc}: ${e.message}`);
+          errors.push(`${role}@${loc}: ${e.message}`);
           return [];
         }
       }));
       const jobs: any[] = results.flat();
+
 
       // Dedupe within batch + against DB, then cap to 8 to keep AI scoring fast.
       const seen = new Set<string>();
