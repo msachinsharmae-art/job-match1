@@ -139,6 +139,15 @@ function Dashboard({ userId, email }: { userId: string; email?: string }) {
     onError: (e: any) => toast.error(e.message),
   });
 
+  const rescoreMutation = useMutation({
+    mutationFn: async () => rescoreFn(),
+    onSuccess: (r) => {
+      toast.success(`Rescored ${r.rescored} jobs`);
+      qc.invalidateQueries({ queryKey: ["jobs"] });
+    },
+    onError: (e: any) => toast.error(e.message),
+  });
+
   const filteredJobs = jobs.filter(j => {
     if (filterDate === "all") return true;
     const maxHours = filterDate === "24h" ? 24 : filterDate === "7d" ? 24 * 7 : 24 * 30;
