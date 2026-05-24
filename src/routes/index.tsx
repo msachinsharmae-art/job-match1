@@ -91,6 +91,7 @@ type Profile = {
 function Dashboard({ userId, email }: { userId: string; email?: string }) {
   const qc = useQueryClient();
   const scanFn = useServerFn(scanJobs);
+  const rescoreFn = useServerFn(rescoreAllJobs);
   const [filterStatus, setFilterStatus] = useState<string>("all");
   const [filterDate, setFilterDate] = useState<string>("all");
 
